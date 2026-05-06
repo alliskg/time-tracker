@@ -150,9 +150,9 @@ const makeDefaultRoutines = () => [
     name: 'Morning',
     timeOfDay: 'morning',
     tasks: [
-      { id: uid(), label: 'Wake up & hydrate', nodeId: null, estimatedMinutes: 5 },
-      { id: uid(), label: 'Stretch / movement', nodeId: null, estimatedMinutes: 10 },
-      { id: uid(), label: 'Plan the day', nodeId: null, estimatedMinutes: 10 },
+      { id: uid(), label: 'Wake up & hydrate', nodeId: null, estimatedMinutes: 5, trackAsHabit: true },
+      { id: uid(), label: 'Stretch / movement', nodeId: null, estimatedMinutes: 10, trackAsHabit: true },
+      { id: uid(), label: 'Plan the day', nodeId: null, estimatedMinutes: 10, trackAsHabit: true },
     ],
   },
   {
@@ -160,8 +160,8 @@ const makeDefaultRoutines = () => [
     name: 'Evening',
     timeOfDay: 'evening',
     tasks: [
-      { id: uid(), label: 'Review the day', nodeId: null, estimatedMinutes: 5 },
-      { id: uid(), label: 'Wind down', nodeId: null, estimatedMinutes: 15 },
+      { id: uid(), label: 'Review the day', nodeId: null, estimatedMinutes: 5, trackAsHabit: true },
+      { id: uid(), label: 'Wind down', nodeId: null, estimatedMinutes: 15, trackAsHabit: true },
     ],
   },
 ];
@@ -1848,7 +1848,7 @@ const RoutineEditor = ({ routine, nodes, onClose, onSave, onDelete }) => {
     setTasks(tasks.map(t => t.id === id ? { ...t, ...patch } : t));
   };
   const removeTask = (id) => setTasks(tasks.filter(t => t.id !== id));
-  const addTask = () => setTasks([...tasks, { id: uid(), label: '', nodeId: null, estimatedMinutes: 0 }]);
+  const addTask = () => setTasks([...tasks, { id: uid(), label: '', nodeId: null, estimatedMinutes: 0, trackAsHabit: true }]);
   const moveTask = (id, dir) => {
     const idx = tasks.findIndex(t => t.id === id);
     if (idx === -1) return;
@@ -1867,6 +1867,7 @@ const RoutineEditor = ({ routine, nodes, onClose, onSave, onDelete }) => {
         ...t,
         label: t.label.trim(),
         estimatedMinutes: t.estimatedMinutes ? Number(t.estimatedMinutes) : 0,
+        trackAsHabit: t.trackAsHabit !== false, // default true
       }));
     onSave({ id: init.id, name: name.trim(), timeOfDay, tasks: cleaned });
   };
@@ -1952,6 +1953,23 @@ const RoutineEditor = ({ routine, nodes, onClose, onSave, onDelete }) => {
                 }}
               />
             </div>
+            <button
+              onClick={() => updateTask(t.id, { trackAsHabit: t.trackAsHabit === false })}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8, padding: '6px 4px',
+                border: 'none', background: 'transparent', cursor: 'pointer',
+                fontFamily: 'var(--font-body)',
+              }}
+            >
+              <span style={{
+                width: 18, height: 18, borderRadius: 5,
+                border: `2px solid ${t.trackAsHabit !== false ? 'var(--accent)' : 'var(--border)'}`,
+                background: t.trackAsHabit !== false ? 'var(--accent)' : 'transparent',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: '#fff', fontSize: 12, flexShrink: 0,
+              }}>{t.trackAsHabit !== false ? '✓' : ''}</span>
+              <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>Track as habit</span>
+            </button>
             {pickerForTask === t.id && (
               <Modal open={true} onClose={() => setPickerForTask(null)} title="Link to category">
                 <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 }}>
@@ -1997,6 +2015,340 @@ const RoutineEditor = ({ routine, nodes, onClose, onSave, onDelete }) => {
         </Modal>
       )}
     </Modal>
+  );
+};
+
+
+// ============================================================
+// HABITS TAB — flatten routine tasks into per-day yes/no grid
+// ============================================================
+const HabitsTab = ({ routines, routineLogs }) => {
+  // Build flat list of habits = only tasks where trackAsHabit !== false
+  const habits = useMemo(() => {
+    const out = [];
+    routines.forEach(r => {
+      r.tasks.forEach(t => {
+        if (t.trackAsHabit === false) return;
+        out.push({
+          taskId: t.id,
+          routineId: r.id,
+          routineName: r.name,
+          label: t.label,
+          timeOfDay: r.timeOfDay,
+        });
+      });
+    });
+    return out;
+  }, [routines]);
+
+  // Map for quick lookup: routineId -> date -> Set of completed taskIds
+  const completionMap = useMemo(() => {
+    const m = new Map();
+    routineLogs.forEach(log => {
+      const key = `${log.routineId}:${log.date}`;
+      m.set(key, new Set(log.completedTaskIds));
+    });
+    return m;
+  }, [routineLogs]);
+
+  const isDone = (habit, date) => {
+    const set = completionMap.get(`${habit.routineId}:${date}`);
+    return set ? set.has(habit.taskId) : false;
+  };
+
+  // Build the date range: today back to ~12 weeks (84 days) for the grid by default
+  const today = todayStr();
+  const NUM_WEEKS = 12;
+
+  // Find the Monday of this week, then walk back NUM_WEEKS-1 weeks for the start.
+  const thisMonday = startOfWeek(today);
+  const gridStart = addDays(thisMonday, -(NUM_WEEKS - 1) * 7);
+  // Build all dates from gridStart to thisMonday + 6 (Sunday)
+  const allDates = useMemo(() => {
+    const out = [];
+    for (let i = 0; i < NUM_WEEKS * 7; i++) {
+      out.push(addDays(gridStart, i));
+    }
+    return out;
+  }, [gridStart]);
+
+  // Group into weeks. Each week is 7 dates Mon..Sun.
+  const weeks = useMemo(() => {
+    const w = [];
+    for (let i = 0; i < NUM_WEEKS; i++) {
+      // Reverse days within each week so the most recent day is on the left
+      w.push(allDates.slice(i * 7, i * 7 + 7).slice().reverse());
+    }
+    // Reverse the order of weeks so the most recent week is on the left
+    return w.reverse();
+  }, [allDates]);
+
+  // Per-habit stats: current streak, best streak, completion % across all routineLogs
+  const computeStats = (habit) => {
+    let current = 0;
+    let best = 0;
+    let run = 0;
+    // current streak: count back from today while done
+    let d = today;
+    while (true) {
+      if (!isDone(habit, d)) break;
+      current++;
+      d = addDays(d, -1);
+      if (current > 365) break;
+    }
+    // For best streak + completion%, scan all dates from earliest log forward.
+    // Earliest date among routineLogs (or today)
+    const allLogDates = routineLogs.map(l => l.date).filter(Boolean).sort();
+    const firstDate = allLogDates[0] || today;
+    let totalDays = 0;
+    let doneDays = 0;
+    let cursor = firstDate;
+    while (cursor <= today) {
+      totalDays++;
+      if (isDone(habit, cursor)) {
+        doneDays++;
+        run++;
+        if (run > best) best = run;
+      } else {
+        run = 0;
+      }
+      cursor = addDays(cursor, 1);
+      if (totalDays > 730) break; // safety cap
+    }
+    const pct = totalDays > 0 ? Math.round((doneDays / totalDays) * 100) : 0;
+    return { current, best, pct, totalDays, doneDays };
+  };
+
+  const order = { morning: 0, anytime: 1, evening: 2 };
+
+  // Group habits by routine, preserving routine order (by time-of-day, then name)
+  const groupedHabits = useMemo(() => {
+    const byRoutine = new Map();
+    habits.forEach(h => {
+      if (!byRoutine.has(h.routineId)) {
+        byRoutine.set(h.routineId, {
+          routineId: h.routineId,
+          routineName: h.routineName,
+          timeOfDay: h.timeOfDay,
+          items: [],
+        });
+      }
+      byRoutine.get(h.routineId).items.push(h);
+    });
+    const groups = Array.from(byRoutine.values());
+    groups.sort((a, b) => {
+      const oa = order[a.timeOfDay] ?? 1;
+      const ob = order[b.timeOfDay] ?? 1;
+      if (oa !== ob) return oa - ob;
+      return a.routineName.localeCompare(b.routineName);
+    });
+    return groups;
+  }, [habits]);
+
+  return (
+    <div style={{ padding: '16px 16px 100px' }}>
+      <h1 style={{ margin: 0, fontFamily: 'var(--font-heading)', fontSize: 32, fontWeight: 400, color: 'var(--text)' }}>Habits</h1>
+      <div style={{ fontSize: 14, color: 'var(--text-muted)', marginTop: 4, marginBottom: 18 }}>
+        Last {NUM_WEEKS} weeks · {habits.length} habit{habits.length === 1 ? '' : 's'} across {groupedHabits.length} routine{groupedHabits.length === 1 ? '' : 's'}
+      </div>
+
+      {habits.length === 0 && (
+        <div style={{
+          background: 'var(--card-bg)', borderRadius: 14, padding: 24,
+          textAlign: 'center', color: 'var(--text-muted)', fontSize: 14, border: '1px solid var(--border)',
+        }}>
+          No habits yet. In the Routines tab, add tasks and mark "Track as habit" — they'll appear here.
+        </div>
+      )}
+
+      {habits.length > 0 && (
+        <HabitsGrid groups={groupedHabits} weeks={weeks} isDone={isDone} today={today} />
+      )}
+
+      {/* Per-habit details, grouped by routine */}
+      {habits.length > 0 && (
+        <div style={{ marginTop: 28 }}>
+          <Label>Streaks &amp; completion</Label>
+          {groupedHabits.map(g => (
+            <div key={g.routineId} style={{ marginBottom: 18 }}>
+              <div style={{
+                display: 'flex', alignItems: 'baseline', gap: 8,
+                padding: '6px 4px 8px',
+              }}>
+                <div style={{ fontFamily: 'var(--font-heading)', fontSize: 18, color: 'var(--text)' }}>{g.routineName}</div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'capitalize' }}>{g.timeOfDay}</div>
+              </div>
+              {g.items.map(h => {
+                const s = computeStats(h);
+                return (
+                  <div key={`${h.routineId}_${h.taskId}`} style={{
+                    background: 'var(--card-bg)', border: '1px solid var(--border)',
+                    borderRadius: 14, padding: 14, marginBottom: 8,
+                  }}>
+                    <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>{h.label}</div>
+                    <div style={{ display: 'flex', gap: 16, marginTop: 10, alignItems: 'center' }}>
+                      <Stat label="Current" value={s.current === 0 ? '–' : `🔥 ${s.current}`} />
+                      <Stat label="Best" value={s.best === 0 ? '–' : `${s.best}d`} />
+                      <Stat label="Done" value={`${s.doneDays}/${s.totalDays}`} />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                          <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: 600 }}>Rate</span>
+                          <span style={{ fontSize: 13, color: 'var(--text)', fontWeight: 600 }}>{s.pct}%</span>
+                        </div>
+                        <div style={{ height: 6, background: 'var(--input-bg)', borderRadius: 3, overflow: 'hidden', marginTop: 4 }}>
+                          <div style={{ width: `${s.pct}%`, height: '100%', background: 'var(--accent)', transition: 'width 0.3s' }} />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const Stat = ({ label, value }) => (
+  <div style={{ minWidth: 50 }}>
+    <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: 600 }}>{label}</div>
+    <div style={{ fontSize: 14, color: 'var(--text)', fontWeight: 600, marginTop: 2 }}>{value}</div>
+  </div>
+);
+
+const HabitsGrid = ({ groups, weeks, isDone, today }) => {
+  // Layout: horizontal scroll. Left column is habit names. Then for each week, 7 squares stacked vertically (Mon top, Sun bottom).
+  // Each habit = one ROW. Rows are grouped by routine, with a header row above each group and a faint divider between.
+
+  const sq = 14;     // square size
+  const gap = 3;     // gap between squares
+  const weekGap = 6; // gap between weeks
+  const weekWidth = 7 * sq + 6 * gap;
+
+  // Each week array is reversed (newest first), so the Monday is at the end.
+  const weekLabel = (week) => {
+    const monday = week[week.length - 1];
+    const d = parseDate(monday);
+    return `${d.getMonth() + 1}/${d.getDate()}`;
+  };
+
+  const NAME_W = 110;
+  const totalGridWidth = weeks.length * weekWidth + (weeks.length - 1) * weekGap;
+
+  return (
+    <div style={{
+      background: 'var(--card-bg)', border: '1px solid var(--border)',
+      borderRadius: 14, padding: 12, overflowX: 'auto',
+      WebkitOverflowScrolling: 'touch',
+    }}>
+      <div style={{ minWidth: NAME_W + totalGridWidth }}>
+        {/* Header: week labels (Monday of each week) */}
+        <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: 6 }}>
+          <div style={{ width: NAME_W, flexShrink: 0 }} />
+          {weeks.map((w, i) => (
+            <div key={i} style={{
+              width: weekWidth, marginRight: i === weeks.length - 1 ? 0 : weekGap,
+              fontSize: 9, color: 'var(--text-muted)', textAlign: 'center',
+              fontVariantNumeric: 'tabular-nums', letterSpacing: 0.3,
+            }}>
+              {weekLabel(w)}
+            </div>
+          ))}
+        </div>
+
+        {/* Grouped habit rows */}
+        {groups.map((g, gi) => (
+          <div key={g.routineId} style={{
+            marginTop: gi === 0 ? 0 : 8,
+            paddingTop: gi === 0 ? 0 : 8,
+            borderTop: gi === 0 ? 'none' : '1px solid var(--border)',
+          }}>
+            {/* Group header row */}
+            <div style={{
+              display: 'flex', alignItems: 'center', marginBottom: 4,
+              paddingTop: 2,
+            }}>
+              <div style={{
+                width: NAME_W, flexShrink: 0, paddingRight: 8,
+                fontSize: 11, fontWeight: 700, color: 'var(--accent)',
+                letterSpacing: 0.4, textTransform: 'uppercase',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {g.routineName}
+              </div>
+              <div style={{
+                flex: 1, height: 1, background: 'var(--border)',
+              }} />
+            </div>
+
+            {/* Habit rows within this group */}
+            {g.items.map(h => (
+              <div key={`${h.routineId}_${h.taskId}`} style={{
+                display: 'flex', alignItems: 'center', marginBottom: 4,
+              }}>
+                <div style={{
+                  width: NAME_W, flexShrink: 0, paddingRight: 8, paddingLeft: 8,
+                  fontSize: 12, color: 'var(--text)', fontWeight: 500,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}>
+                  {h.label}
+                </div>
+                {weeks.map((w, wi) => (
+                  <div key={wi} style={{
+                    display: 'flex', gap, marginRight: wi === weeks.length - 1 ? 0 : weekGap,
+                  }}>
+                    {w.map(d => {
+                      const future = d > today;
+                      const done = !future && isDone(h, d);
+                      const isToday = d === today;
+                      return (
+                        <div
+                          key={d}
+                          title={`${d} ${done ? '✓' : ''}`}
+                          style={{
+                            width: sq, height: sq, borderRadius: 3,
+                            background: future
+                              ? 'transparent'
+                              : (done ? 'var(--accent)' : 'var(--input-bg)'),
+                            border: future
+                              ? '1px dashed var(--border)'
+                              : (isToday ? '1.5px solid var(--text)' : '1px solid var(--border)'),
+                            boxSizing: 'border-box',
+                          }}
+                        />
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        ))}
+
+        {/* Day-of-week legend at bottom */}
+        <div style={{ display: 'flex', alignItems: 'center', marginTop: 14 }}>
+          <div style={{ width: NAME_W, flexShrink: 0, fontSize: 10, color: 'var(--text-muted)', letterSpacing: 0.3 }}>
+            Newest → oldest
+          </div>
+          <div style={{ display: 'flex', gap: 12, fontSize: 10, color: 'var(--text-muted)', alignItems: 'center' }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ width: 10, height: 10, background: 'var(--accent)', borderRadius: 2, display: 'inline-block' }} />
+              done
+            </span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ width: 10, height: 10, background: 'var(--input-bg)', border: '1px solid var(--border)', borderRadius: 2, display: 'inline-block' }} />
+              missed
+            </span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ width: 10, height: 10, border: '1.5px solid var(--text)', borderRadius: 2, display: 'inline-block', background: 'var(--input-bg)' }} />
+              today
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 };
 
@@ -2447,6 +2799,7 @@ const TAB_ICONS = {
   log: 'M3 5h18 M3 12h18 M3 19h18',
   stats: 'M3 21V11 M9 21V3 M15 21V14 M21 21V8',
   routines: 'M9 11l3 3 8-8 M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11',
+  habits: 'M3 9h18 M5 5h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2z M16 3v4 M8 3v4 M8 13h2 M14 13h2 M8 17h2 M14 17h2',
   settings: 'M12 15a3 3 0 100-6 3 3 0 000 6z M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33h.01a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82v.01a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z',
 };
 
@@ -2456,6 +2809,7 @@ const TabBar = ({ activeTab, onChange }) => {
     { id: 'log', label: 'Log' },
     { id: 'stats', label: 'Stats' },
     { id: 'routines', label: 'Routines' },
+    { id: 'habits', label: 'Habits' },
     { id: 'settings', label: 'Settings' },
   ];
   return (
@@ -2477,7 +2831,7 @@ const TabBar = ({ activeTab, onChange }) => {
               key={t.id}
               onClick={() => onChange(t.id)}
               style={{
-                flex: 1, padding: '10px 0 8px', border: 'none',
+                flex: 1, minWidth: 0, padding: '10px 2px 8px', border: 'none',
                 background: 'transparent', cursor: 'pointer',
                 display: 'flex', flexDirection: 'column',
                 alignItems: 'center', gap: 4,
@@ -2485,10 +2839,10 @@ const TabBar = ({ activeTab, onChange }) => {
                 fontFamily: 'var(--font-body)',
               }}
             >
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d={TAB_ICONS[t.id]} />
               </svg>
-              <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: 0.3 }}>{t.label}</span>
+              <span style={{ fontSize: 9.5, fontWeight: 600, letterSpacing: 0.2 }}>{t.label}</span>
             </button>
           );
         })}
@@ -2586,6 +2940,9 @@ export default function TimeTracker() {
           nodes={nodes}
           onAutoLogEntry={onPushEntry}
         />
+      )}
+      {activeTab === 'habits' && (
+        <HabitsTab routines={routines} routineLogs={routineLogs} />
       )}
       {activeTab === 'settings' && (
         <SettingsTab
