@@ -455,6 +455,60 @@ const TreePicker = ({ nodes, selectedId, onSelect, allowClear = false, allowAny 
 
 
 // ============================================================
+// SCORE SELECTOR — 1-10 focus / productivity
+// ============================================================
+const ScoreSelector = ({ label, value, onChange }) => {
+  // value is null (unscored) or 1-10
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 8 }}>
+        <Label style={{ marginBottom: 0 }}>{label}</Label>
+        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+          {value == null ? 'Not rated' : (
+            <>
+              <span style={{ fontFamily: 'var(--font-heading)', fontSize: 18, color: 'var(--text)', marginRight: 4 }}>{value}</span>
+              <span>/ 10</span>
+              <button
+                onClick={() => onChange(null)}
+                style={{
+                  marginLeft: 10, padding: '2px 8px', border: 'none',
+                  background: 'var(--input-bg)', color: 'var(--text-muted)',
+                  borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                  fontFamily: 'var(--font-body)',
+                }}
+              >clear</button>
+            </>
+          )}
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 4 }}>
+        {[1,2,3,4,5,6,7,8,9,10].map(n => {
+          const selected = value === n;
+          const inRange = value != null && n <= value;
+          return (
+            <button
+              key={n}
+              onClick={() => onChange(n)}
+              style={{
+                flex: 1, padding: '10px 0', border: '1px solid var(--border)',
+                background: inRange ? 'var(--accent)' : 'var(--input-bg)',
+                color: inRange ? '#fff' : 'var(--text-muted)',
+                borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                fontFamily: 'var(--font-body)',
+                outline: selected ? '2px solid var(--text)' : 'none',
+                outlineOffset: 1,
+                transition: 'background 0.1s',
+              }}
+              aria-label={`${label} ${n} of 10`}
+            >{n}</button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
 // TIMER TAB
 // ============================================================
 // Stopwatch elapsed = accumulatedMs + (isRunning && !isPaused ? now - startTs : 0)
@@ -761,6 +815,8 @@ const PushModal = ({ stopwatch, nodes, onClose, onConfirm }) => {
   const [nodeId, setNodeId] = useState(stopwatch.nodeId);
   const [label, setLabel] = useState(stopwatch.label);
   const [note, setNote] = useState('');
+  const [focus, setFocus] = useState(null);
+  const [productivity, setProductivity] = useState(null);
   const [showPicker, setShowPicker] = useState(false);
 
   // Editable times (HH:MM)
@@ -796,6 +852,8 @@ const PushModal = ({ stopwatch, nodes, onClose, onConfirm }) => {
       durationMs: finalDuration,
       date: dateStr(new Date(finalStart)),
       note: note.trim(),
+      focus,
+      productivity,
     });
   };
 
@@ -848,7 +906,7 @@ const PushModal = ({ stopwatch, nodes, onClose, onConfirm }) => {
         />
       </div>
 
-      <div style={{ marginBottom: 24 }}>
+      <div style={{ marginBottom: 16 }}>
         <Label>Note (optional)</Label>
         <textarea
           value={note}
@@ -863,6 +921,11 @@ const PushModal = ({ stopwatch, nodes, onClose, onConfirm }) => {
           }}
         />
       </div>
+
+      <ScoreSelector label="Focus" value={focus} onChange={setFocus} />
+      <ScoreSelector label="Productivity" value={productivity} onChange={setProductivity} />
+
+      <div style={{ height: 8 }} />
 
       <div style={{ display: 'flex', gap: 10 }}>
         <Button variant="secondary" onClick={() => submit(true)} style={{ flex: 1 }}>
@@ -1071,6 +1134,7 @@ const EntryRow = ({ entry, nodes, onTap }) => {
   const node = entry.nodeId ? findNode(nodes, entry.nodeId) : null;
   const title = entry.label || (node ? nodeBreadcrumb(nodes, node.id) : 'Unlabeled');
   const subtitle = entry.label && node ? nodeBreadcrumb(nodes, node.id) : '';
+  const hasScores = entry.focus != null || entry.productivity != null;
   return (
     <button
       onClick={onTap}
@@ -1089,9 +1153,25 @@ const EntryRow = ({ entry, nodes, onTap }) => {
           fontStyle: !entry.nodeId && !entry.label ? 'italic' : 'normal',
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>{title}</div>
-        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
-          {formatTime(entry.startTs)} – {formatTime(entry.endTs)}
-          {subtitle && ` · ${subtitle}`}
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <span>{formatTime(entry.startTs)} – {formatTime(entry.endTs)}</span>
+          {subtitle && <span>· {subtitle}</span>}
+          {hasScores && (
+            <span style={{ display: 'inline-flex', gap: 4 }}>
+              {entry.focus != null && (
+                <span style={{
+                  padding: '1px 6px', borderRadius: 4, fontSize: 11, fontWeight: 600,
+                  background: 'rgba(232,103,46,0.10)', color: 'var(--accent)',
+                }}>F {entry.focus}</span>
+              )}
+              {entry.productivity != null && (
+                <span style={{
+                  padding: '1px 6px', borderRadius: 4, fontSize: 11, fontWeight: 600,
+                  background: 'rgba(232,103,46,0.10)', color: 'var(--accent)',
+                }}>P {entry.productivity}</span>
+              )}
+            </span>
+          )}
         </div>
       </div>
       <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text)', fontVariantNumeric: 'tabular-nums' }}>
@@ -1113,6 +1193,8 @@ const EntryEditor = ({ mode, entry, initialDate, nodes, onClose, onSave, onDelet
   const [nodeId, setNodeId] = useState(init.nodeId);
   const [label, setLabel] = useState(init.label || '');
   const [note, setNote] = useState(init.note || '');
+  const [focus, setFocus] = useState(init.focus ?? null);
+  const [productivity, setProductivity] = useState(init.productivity ?? null);
   const [date, setDate] = useState(entry ? entry.date : (initialDate || today));
 
   // For the time inputs: HH:MM strings.
@@ -1153,6 +1235,8 @@ const EntryEditor = ({ mode, entry, initialDate, nodes, onClose, onSave, onDelet
       durationMs,
       date: dateStr(new Date(startTs)),
       note: note.trim(),
+      focus,
+      productivity,
     });
   };
 
@@ -1202,7 +1286,7 @@ const EntryEditor = ({ mode, entry, initialDate, nodes, onClose, onSave, onDelet
         <TextInput value={label} onChange={e => setLabel(e.target.value)} placeholder="What was this?" />
       </div>
 
-      <div style={{ marginBottom: 20 }}>
+      <div style={{ marginBottom: 16 }}>
         <Label>Note</Label>
         <textarea
           value={note}
@@ -1215,6 +1299,11 @@ const EntryEditor = ({ mode, entry, initialDate, nodes, onClose, onSave, onDelet
           }}
         />
       </div>
+
+      <ScoreSelector label="Focus" value={focus} onChange={setFocus} />
+      <ScoreSelector label="Productivity" value={productivity} onChange={setProductivity} />
+
+      <div style={{ height: 8 }} />
 
       <div style={{ display: 'flex', gap: 10 }}>
         {mode === 'edit' && (
